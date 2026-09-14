@@ -37,6 +37,7 @@ class GitHubAPI:
         self._open = opener or build_opener(_NoRedirect()).open
         self.timeout = timeout
         self.base = f"https://api.github.com/repos/{repository}/"
+        self._repository_id = None
 
     def __repr__(self):
         return f"GitHubAPI(repository={self.repository!r}, dry_run={self.dry_run!r})"
@@ -46,8 +47,21 @@ class GitHubAPI:
         parts = urlparse(url)
         prefix = urlparse(self.base).path
         if (parts.scheme != "https" or parts.netloc != "api.github.com"
-                or parts.username or parts.fragment or not parts.path.startswith(prefix)
+                or parts.username or parts.fragment
                 or any(x in parts.path for x in ("..", "%", "\\"))):
+            raise ValueError("cross-repository/unsafe API route")
+        allowed = parts.path.startswith(prefix) or parts.path == prefix.rstrip("/")
+        if not allowed and parts.path.startswith("/repositories/"):
+            # GitHub pagination can canonicalize owner/name to a numeric repo ID.
+            # Resolve that ID through our already-approved alias before allowing it.
+            if self._repository_id is None:
+                metadata, _ = self.request("GET", self.base.rstrip("/"))
+                if (type(metadata) is not dict or metadata.get("full_name") != self.repository
+                        or type(metadata.get("id")) is not int):
+                    raise ValueError("repository identity could not be verified")
+                self._repository_id = metadata["id"]
+            allowed = parts.path.startswith(f"/repositories/{self._repository_id}/")
+        if not allowed:
             raise ValueError("cross-repository/unsafe API route")
         return url
 
