@@ -1,0 +1,62 @@
+name: R2 Protection Probe
+on:
+  workflow_dispatch:
+permissions: {}
+jobs:
+  probe:
+    if: github.actor == 'zynis' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Verify write token cannot change protected synthetic ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FIXTURE: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          python3 - <<'PY'
+          import json, os, urllib.request, urllib.error
+          repo = os.environ['FIXTURE']
+          assert repo == 'zynis/ai-dev-orchestrator-r2-fixture'
+          def api(path, method='GET', data=None):
+              req = urllib.request.Request('https://api.github.com/repos/'+repo+'/'+path,
+                  data=None if data is None else json.dumps(data).encode(), method=method,
+                  headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],
+                           'Accept':'application/vnd.github+json'})
+              try:
+                  with urllib.request.urlopen(req) as r:
+                      raw=r.read()
+                      return r.status, json.loads(raw) if raw else None
+              except urllib.error.HTTPError as e:
+                  return e.code, json.loads(e.read())
+          main = api('git/ref/heads/main')[1]['object']['sha']
+          head = api('git/ref/heads/protected-sentinel')[1]['object']['sha']
+          tree = api('git/commits/'+head)[1]['tree']['sha']
+          author={'name':'R2 Synthetic Probe','email':'r2-probe@example.invalid','date':'2026-09-14T00:00:00Z'}
+          status, child = api('git/commits','POST',{'tree':tree,'parents':[head],
+              'message':'Synthetic protection child '+os.environ['RUN_ID'],'author':author,'committer':author})
+          assert status == 201
+          status, root = api('git/commits','POST',{'tree':tree,'parents':[],
+              'message':'Synthetic non-fast-forward probe '+os.environ['RUN_ID'],'author':author,'committer':author})
+          assert status == 201
+          positive='protection-positive-'+os.environ['RUN_ID']
+          status, _ = api('git/refs','POST',{'ref':'refs/heads/'+positive,'sha':child['sha']})
+          assert status == 201, 'positive write capability unavailable'
+          results=[]
+          for label, method, payload in (
+              ('direct_update','PATCH',{'sha':child['sha'],'force':False}),
+              ('force_push','PATCH',{'sha':root['sha'],'force':True}),
+              ('delete','DELETE',None)):
+              status, body=api('git/refs/heads/protected-sentinel',method,payload)
+              assert status in (403,422) and ('rule' in json.dumps(body).lower() or 'protect' in json.dumps(body).lower()), (label,status)
+              assert api('git/ref/heads/protected-sentinel')[1]['object']['sha'] == head
+              results.append({'operation':label,'status':status,'message':body.get('message')})
+          assert api('git/ref/heads/main')[1]['object']['sha'] == main
+          rules=api('rules/branches/main')[1]
+          assert {'update','deletion','non_fast_forward'}.issubset({r['type'] for r in rules})
+          print(json.dumps({'protection':'PASS','main':main,'sentinel':head,
+                'positive_ref':positive,'negative_results':results}))
+          with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as f:
+              f.write('R2 synthetic protection PASS\n\n'+json.dumps(results)+'\n')
+          PY
