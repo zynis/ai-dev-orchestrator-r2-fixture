@@ -39,3 +39,7 @@ class ProjectBinding:
         if type(issue) is not int or issue < 1:
             raise ValueError('invalid Issue identity')
         return self.branch_prefix + str(issue)
+
+    def actor_allowed(self, login, identity, *, allow_bot=True):
+        return ((login == self.planner_login and str(identity) == self.planner_id) or
+                (allow_bot and login == 'github-actions[bot]' and str(identity) == '41898282'))

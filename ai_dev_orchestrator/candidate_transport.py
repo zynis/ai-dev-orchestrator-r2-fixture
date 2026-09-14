@@ -114,7 +114,9 @@ def decode(wire, expected_identity, base, *, allowed_paths, allowed_deletes=()):
     _check(identity["attempt"] <= 3, "attempt limit")
     for key in IDENTITY_KEYS - {"attempt", "expected_revision"}:
         _check(type(identity[key]) is str and bool(identity[key].strip()), "identity string")
-    _check(re.fullmatch(r"ai-orchestrator/round-[1-9][0-9]*", identity["expected_branch"]), "unexpected ref")
+    # Exact expected_identity comes from the durable controller reservation.
+    # Publisher independently enforces the installed project's allowed prefix.
+    _check(re.fullmatch(r"[a-zA-Z0-9_-]+/[a-zA-Z0-9_/-]*[1-9][0-9]*", identity["expected_branch"]), "unexpected ref")
     encoded = canonical(payload)
     _check(type(envelope["payload_bytes"]) is int and envelope["payload_bytes"] == len(encoded)
            and envelope["transport_digest"] == hash_bytes(encoded), "transport digest/length mismatch")

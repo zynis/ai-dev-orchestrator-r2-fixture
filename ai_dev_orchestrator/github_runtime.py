@@ -143,7 +143,8 @@ class GitHubRuntime:
         if existing:
             issue = existing[0]
             stored = json.loads(issue["body"][len(ISSUE_MARKER)+1:])
-            require(stored["goal"] == spec["goal"] and stored["base_sha"] == cp, "submission conflict")
+            require({k:v for k,v in stored.items() if k != 'authorization_evidence'} ==
+                    {k:v for k,v in spec.items() if k != 'authorization_evidence'}, 'submission conflict')
             spec = stored
         else:
             body = issue_body(spec)
@@ -174,7 +175,7 @@ class GitHubRuntime:
         api = self.api_client()
         cp = self.context(api)
         require(os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch" and
-                os.environ.get("GITHUB_ACTOR") in (self.binding.planner_login,BOT), "untrusted re-entry actor/event")
+                self.binding.actor_allowed(os.environ.get("GITHUB_ACTOR"), os.environ.get("GITHUB_ACTOR_ID")), "untrusted re-entry actor/event")
         request = json.loads(os.environ["REQUEST"])
         require(set(request) == {"run_id","round_id","event_id","expected_revision","expected_sha"}, "dispatch schema")
         issue = self.find_issue(api, request["round_id"])
@@ -298,18 +299,15 @@ class GitHubRuntime:
         doc = store.repair()
         require(doc["spec"] == plan["spec"], "frozen spec differs")
         controller = Controller(store)
-        finding = self.adapter.finding(review) if review and review["p1"] else None
         payloads = [
             (EventKind.DELIVERY,Delivery(ident["run_id"],ident["round_id"],ident["attempt"],ident["base_sha"],
-                ident["input_sha"],candidate,ident["spec_digest"],"mock-executor-job",self.run_url())),
+                ident["input_sha"],candidate,ident["spec_digest"],self.adapter.executor_identity,self.run_url())),
             (EventKind.SIT,BoundResult(candidate,ident["spec_digest"],Outcome(report["outcome"]),self.run_url())),
         ]
         if report["outcome"] == "PASS":
             payloads += [
-            (EventKind.ACCESS,ReviewAccess(candidate,ident["spec_digest"],Outcome(review["access"]),self.run_url(),"mock-reviewer-job")),
-            (EventKind.REVIEW,ReviewResult(candidate,ident["spec_digest"],
-                Outcome.BLOCKED if review["access"] != "PASS" else Outcome(review["outcome"]),
-                self.run_url(),"mock-reviewer-job",True,0,int(review["p1"]),0,(finding,) if review["p1"] else ())),
+            (EventKind.ACCESS,ReviewAccess(candidate,ident["spec_digest"],Outcome(review["access"]),self.run_url(),self.adapter.reviewer_identity)),
+            (EventKind.REVIEW,self.adapter.review_result(review,candidate,ident["spec_digest"],self.run_url())),
             ]
         for kind,payload in payloads:
             current = RunState.from_dict(doc["run"])
@@ -362,7 +360,7 @@ class GitHubRuntime:
                 failed = api.get("actions/runs/"+os.environ["FAILED_RUN_ID"])
             require(failed["head_sha"] == cp and failed["path"] == ".github/workflows/orchestrator-attempt.yml"
                     and failed["conclusion"] in ("failure","cancelled","timed_out")
-                    and failed["actor"]["login"] in (self.binding.planner_login,BOT), "untrusted recovery signal")
+                    and self.binding.actor_allowed(failed["actor"]["login"], failed["actor"]["id"]), "untrusted recovery signal")
             match = re.fullmatch(r"Orchestrator attempt ([a-z0-9-]+) ([a-z0-9-]+)",failed["display_title"])
             require(match,"unknown failed run identity")
             round_id = match.group(1)

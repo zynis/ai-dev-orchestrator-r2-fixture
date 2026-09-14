@@ -63,6 +63,15 @@ def scenario(plan):
     return plan["spec"]["goal"].split("scenario=")[1]
 
 class FixtureAdapter:
+    executor_identity = 'mock-executor-job'
+    reviewer_identity = 'mock-reviewer-job'
+
+    def review_result(self, review, candidate, digest, evidence):
+        return ReviewResult(candidate,digest,
+            Outcome.BLOCKED if review['access'] != 'PASS' else Outcome(review['outcome']),
+            evidence,self.reviewer_identity,True,0,int(review['p1']),0,
+            (self.finding(review),) if review['p1'] else ())
+
     @staticmethod
     def submission(request, cp, binding, evidence):
         require(set(request) == {"submission_id", "parameters", "dry_run"}, "intake schema")

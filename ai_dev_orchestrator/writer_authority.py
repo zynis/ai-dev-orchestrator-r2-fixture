@@ -84,6 +84,7 @@ class ReceiptAuthority:
             path = run['path']
             check(path in self.binding.workflows and run['head_sha'] == self.cp
                   and run['head_branch'] == self.binding.branch and run['event'] == 'workflow_dispatch', 'untrusted receipt workflow')
+            check(self.binding.actor_allowed(run['actor']['login'], run['actor']['id']), 'untrusted receipt actor')
             check(job_name in WRITERS.get(path.rsplit('/', 1)[-1], ()), 'non-writer job receipt')
             jobs = self.api.get(f'actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100')
             check(jobs['total_count'] <= 100, 'job inventory truncated')
