@@ -505,6 +505,7 @@ def dispatcher(recovery=False):
         if recovery:
             runs = api.get("actions/workflows/orchestrator-attempt.yml/runs?event=workflow_dispatch&per_page=100")["workflow_runs"]
             matching = [r for r in runs if r["display_title"] == "R2 attempt "+round_id+" "+eid and r["head_sha"] == cp]
+            require(matching, "dispatch outcome unknown; no blind re-POST")
             if any(r["status"] != "completed" for r in matching):
                 sent.append({"event_id":eid,"adopted_active_run":True})
                 continue
