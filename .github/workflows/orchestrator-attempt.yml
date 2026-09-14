@@ -118,7 +118,7 @@ jobs:
         run: python3 -m ai_dev_orchestrator.live_r2 gate
   dispatch:
     needs: gate
-    if: needs.gate.outputs.continue == 'true'
+    if: always() && needs.gate.result == 'success' && needs.gate.outputs.continue == 'true'
     runs-on: ubuntu-24.04
     permissions: {contents: read, issues: read, actions: write}
     steps:
