@@ -1,5 +1,5 @@
-name: R2 Attempt
-run-name: R2 attempt ${{ inputs.round_id }} ${{ inputs.event_id }}
+name: Orchestrator Attempt
+run-name: Orchestrator attempt ${{ inputs.round_id }} ${{ inputs.event_id }}
 on:
   workflow_dispatch:
     inputs:
@@ -14,7 +14,7 @@ concurrency:
   queue: max
 jobs:
   controller:
-    if: (github.actor == 'zynis' || github.actor == 'github-actions[bot]') && github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     permissions: {contents: read, issues: write, actions: read}
     outputs:
@@ -27,7 +27,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REQUEST: ${{ toJSON(inputs) }}
-        run: python3 -m ai_dev_orchestrator.live_r2 enter
+        run: python3 -m ai_dev_orchestrator.control_cli enter
   executor:
     needs: controller
     if: needs.controller.outputs.work == 'true'
@@ -41,7 +41,7 @@ jobs:
       - id: mock
         env:
           PLAN: ${{ needs.controller.outputs.plan }}
-        run: python3 -m ai_dev_orchestrator.live_r2 mock
+        run: python3 -m ai_dev_orchestrator.control_cli mock
   publisher:
     needs: [controller, executor]
     runs-on: ubuntu-24.04
@@ -57,7 +57,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PLAN: ${{ needs.controller.outputs.plan }}
           TRANSPORT: ${{ needs.executor.outputs.transport }}
-        run: python3 -m ai_dev_orchestrator.live_r2 publish
+        run: python3 -m ai_dev_orchestrator.control_cli publish
   sit:
     needs: [controller, publisher]
     runs-on: ubuntu-24.04
@@ -76,7 +76,7 @@ jobs:
           PLAN: ${{ needs.controller.outputs.plan }}
           CANDIDATE_SHA: ${{ needs.publisher.outputs.candidate_sha }}
           CANDIDATE_DIR: candidate
-        run: python3 -m ai_dev_orchestrator.live_r2 sit
+        run: python3 -m ai_dev_orchestrator.control_cli sit
   reviewer:
     needs: [controller, publisher, sit]
     if: needs.sit.outputs.outcome == 'PASS'
@@ -96,7 +96,7 @@ jobs:
           CANDIDATE_SHA: ${{ needs.publisher.outputs.candidate_sha }}
           CANDIDATE_DIR: candidate
           SIT_REPORT: ${{ needs.sit.outputs.report }}
-        run: python3 -m ai_dev_orchestrator.live_r2 review
+        run: python3 -m ai_dev_orchestrator.control_cli review
   gate:
     needs: [controller, publisher, sit, reviewer]
     if: always() && needs.controller.outputs.work == 'true' && needs.publisher.result == 'success' && needs.sit.result == 'success'
@@ -115,7 +115,7 @@ jobs:
           PUBLICATION: ${{ needs.publisher.outputs.publication }}
           SIT_REPORT: ${{ needs.sit.outputs.report }}
           REVIEW: ${{ needs.reviewer.outputs.review }}
-        run: python3 -m ai_dev_orchestrator.live_r2 gate
+        run: python3 -m ai_dev_orchestrator.control_cli gate
   dispatch:
     needs: gate
     if: always() && needs.gate.result == 'success' && needs.gate.outputs.continue == 'true'
@@ -127,10 +127,10 @@ jobs:
       - env:
           GH_TOKEN: ${{ github.token }}
           ROUND_ID: ${{ needs.gate.outputs.round_id }}
-        run: python3 -m ai_dev_orchestrator.live_r2 dispatch
+        run: python3 -m ai_dev_orchestrator.control_cli dispatch
   recovery_dispatch:
     needs: [controller, publisher, gate, dispatch]
-    if: always() && needs.controller.outputs.work == 'true' && ((needs.publisher.result == 'failure' && contains(needs.controller.outputs.plan, 'scenario=crash') && !fromJSON(needs.controller.outputs.plan).recovered) || (needs.dispatch.result == 'failure' && contains(needs.controller.outputs.plan, 'scenario=dispatch-loss')))
+    if: always() && needs.controller.outputs.work == 'true' && !fromJSON(needs.controller.outputs.plan).recovered && (needs.publisher.result == 'failure' || needs.dispatch.result == 'failure')
     runs-on: ubuntu-24.04
     permissions: {contents: read, actions: write}
     steps:
@@ -138,4 +138,4 @@ jobs:
         with: {ref: '${{ github.sha }}', persist-credentials: false}
       - env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 -m ai_dev_orchestrator.live_r2 request-recovery
+        run: python3 -m ai_dev_orchestrator.control_cli request-recovery

@@ -97,6 +97,34 @@ class GitHubAPI:
     def get(self, route):
         return self.request("GET", route)[0]
 
+    def job_logs(self, job_id):
+        """Follow GitHub's signed log redirect without forwarding the API token."""
+        if type(job_id) is not int or job_id <= 0:
+            raise ValueError('invalid job ID')
+        request = Request(self._url(f'actions/jobs/{job_id}/logs'), headers={
+            'Authorization': 'Bearer ' + self._token,
+            'Accept': 'application/vnd.github+json'})
+        try:
+            with self._open(request, timeout=self.timeout) as response:
+                return response.read(8_000_001).decode('utf-8')
+        except HTTPError as exc:
+            if exc.code != 302:
+                raise GitHubError(exc.code) from None
+            location = exc.headers.get('Location', '')
+        parts = urlparse(location)
+        if (parts.scheme != 'https' or parts.username or parts.fragment or not
+                (parts.hostname.endswith('.blob.core.windows.net') or
+                 parts.hostname.endswith('.actions.githubusercontent.com'))):
+            raise GitHubError()
+        try:
+            with self._open(Request(location), timeout=self.timeout) as response:
+                data = response.read(8_000_001)
+            if len(data) > 8_000_000:
+                raise GitHubError()
+            return data.decode('utf-8')
+        except (HTTPError, URLError, OSError, ValueError):
+            raise GitHubError() from None
+
     def pages(self, route):
         seen = set()
         while route:

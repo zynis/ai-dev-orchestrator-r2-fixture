@@ -1,15 +1,14 @@
-name: R2 Intake
-run-name: R2 intake ${{ inputs.submission_id }}
+name: Orchestrator Intake
+run-name: Orchestrator intake ${{ inputs.submission_id }}
 on:
   workflow_dispatch:
     inputs:
       submission_id:
         required: true
         type: string
-      scenario:
+      parameters:
         required: true
-        type: choice
-        options: [happy, fix, duplicate, crash, mutable, hostile, concurrent, access, dispatch-loss, sit-fail]
+        type: string
       dry_run:
         type: boolean
         default: false
@@ -19,7 +18,7 @@ concurrency:
   queue: max
 jobs:
   intake:
-    if: github.actor == 'zynis' && github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -38,7 +37,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           SUBMISSION: ${{ toJSON(inputs) }}
-        run: python3 -m ai_dev_orchestrator.live_r2 intake
+        run: python3 -m ai_dev_orchestrator.control_cli intake
   dispatch:
     needs: intake
     if: needs.intake.outputs.work == 'true'
@@ -55,4 +54,4 @@ jobs:
       - env:
           GH_TOKEN: ${{ github.token }}
           ROUND_ID: ${{ needs.intake.outputs.round_id }}
-        run: python3 -m ai_dev_orchestrator.live_r2 dispatch
+        run: python3 -m ai_dev_orchestrator.control_cli dispatch

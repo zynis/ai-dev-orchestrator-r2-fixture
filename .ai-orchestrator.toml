@@ -1,0 +1,19 @@
+
+schema_version = 1
+[project]
+name = "R2 synthetic fixture"
+repository = "zynis/ai-dev-orchestrator-r2-fixture"
+[platform]
+agent_os = "linux"
+sit_os = ["linux"]
+[review]
+required = true
+independent = true
+read_only = true
+blocking_severities = ["P0", "P1"]
+[[sit.commands]]
+id = "integer"
+command = "python3 synthetic_project/test_value.py"
+shell = "bash"
+timeout_seconds = 30
+artifacts = ["reports/result.json"]

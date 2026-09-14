@@ -1,5 +1,5 @@
-name: R2 Recovery
-run-name: R2 recovery ${{ inputs.failed_run_id }}
+name: Orchestrator Recovery
+run-name: Orchestrator recovery ${{ inputs.failed_run_id }}
 on:
   workflow_dispatch:
     inputs:
@@ -10,7 +10,7 @@ concurrency:
   queue: max
 jobs:
   recover:
-    if: (github.actor == 'zynis' || github.actor == 'github-actions[bot]') && github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     permissions: {contents: read, issues: read, actions: write}
     steps:
@@ -19,4 +19,4 @@ jobs:
       - env:
           GH_TOKEN: ${{ github.token }}
           FAILED_RUN_ID: ${{ inputs.failed_run_id }}
-        run: python3 -m ai_dev_orchestrator.live_r2 recover
+        run: python3 -m ai_dev_orchestrator.control_cli recover

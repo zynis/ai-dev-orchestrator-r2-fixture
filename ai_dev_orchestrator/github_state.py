@@ -38,6 +38,9 @@ def parse_comment(body, marker):
     except (ValueError, TypeError):
         raise StateBlocked("invalid comment JSON") from None
     _check(type(value) is dict, "expected comment object")
+    # Transport provenance is verified by the caller before journal parsing.
+    # It is not part of the deterministic document/audit digest schema.
+    value.pop('_writer', None)
     return value
 
 

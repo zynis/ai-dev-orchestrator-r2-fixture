@@ -78,22 +78,22 @@ class Publisher:
         sha = self.git("commit-tree", tree_sha, "-p", identity["input_sha"], data=message.encode()).decode().strip()
         return sha, tree_sha
 
-    def publish(self, candidate_sha, identity, api, token, *, control_plane_sha, dry_run=False):
+    def publish(self, candidate_sha, identity, api, token, *, control_plane_sha, dry_run=False, binding=None):
         if not all(type(value) is str and re.fullmatch(r"[0-9a-f]{40}", value)
                    for value in (candidate_sha, control_plane_sha, identity.get("input_sha"), identity.get("base_sha"))):
             raise PublicationBlocked("full verified SHA required")
         if dry_run or api.dry_run:
             return {"planned_candidate_sha": candidate_sha, "branch": identity["expected_branch"]}
-        if api.repository != "zynis/ai-dev-orchestrator-r2-fixture":
-            raise PublicationBlocked("R2 only authorizes the dedicated fixture")
+        if binding is None or api.repository != binding.repository:
+            raise PublicationBlocked("trusted repository binding required")
         branch = identity["expected_branch"]
-        if not re.fullmatch(r"ai-orchestrator/round-[1-9][0-9]*", branch):
+        if not re.fullmatch(re.escape(binding.branch_prefix) + r"[1-9][0-9]*", branch):
             raise PublicationBlocked("unexpected target ref")
-        if api.get("git/ref/heads/main")["object"]["sha"] != control_plane_sha:
+        if api.get("git/ref/heads/" + binding.branch)["object"]["sha"] != control_plane_sha:
             raise PublicationBlocked("control plane changed")
         # This GET must succeed and identify an active update restriction.
         # A 403 (including private-repository plan restrictions) stops publication.
-        rules = api.get("rules/branches/main")
+        rules = api.get("rules/branches/" + binding.branch)
         if not isinstance(rules, list) or not any(r.get("type") == "update" for r in rules):
             raise PublicationBlocked("server protection unverified")
         from .github_api import GitHubError
