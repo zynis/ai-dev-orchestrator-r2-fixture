@@ -64,6 +64,7 @@ jobs:
     permissions: {contents: read}
     outputs:
       report: ${{ steps.sit.outputs.report }}
+      outcome: ${{ steps.sit.outputs.outcome }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: {ref: '${{ github.sha }}', path: control, persist-credentials: false}
@@ -78,6 +79,7 @@ jobs:
         run: python3 -m ai_dev_orchestrator.live_r2 sit
   reviewer:
     needs: [controller, publisher, sit]
+    if: needs.sit.outputs.outcome == 'PASS'
     runs-on: ubuntu-24.04
     permissions: {contents: read}
     outputs:
@@ -97,6 +99,7 @@ jobs:
         run: python3 -m ai_dev_orchestrator.live_r2 review
   gate:
     needs: [controller, publisher, sit, reviewer]
+    if: always() && needs.controller.outputs.work == 'true' && needs.publisher.result == 'success' && needs.sit.result == 'success'
     runs-on: ubuntu-24.04
     permissions: {contents: read, issues: write, actions: read}
     outputs:
@@ -125,3 +128,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           ROUND_ID: ${{ needs.gate.outputs.round_id }}
         run: python3 -m ai_dev_orchestrator.live_r2 dispatch
+  recovery_dispatch:
+    needs: [controller, publisher, gate, dispatch]
+    if: always() && needs.controller.outputs.work == 'true' && ((needs.publisher.result == 'failure' && contains(needs.controller.outputs.plan, 'scenario=crash') && !fromJSON(needs.controller.outputs.plan).recovered) || (needs.dispatch.result == 'failure' && contains(needs.controller.outputs.plan, 'scenario=dispatch-loss')))
+    runs-on: ubuntu-24.04
+    permissions: {contents: read, actions: write}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {ref: '${{ github.sha }}', persist-credentials: false}
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -m ai_dev_orchestrator.live_r2 request-recovery

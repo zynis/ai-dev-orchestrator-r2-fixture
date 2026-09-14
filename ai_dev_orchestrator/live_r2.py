@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import time
 
 from .candidate_transport import canonical, encode, hash_bytes
 from .domain import (
@@ -24,7 +25,7 @@ BOT = "github-actions[bot]"
 WORKFLOWS = {".github/workflows/orchestrator-intake.yml",
              ".github/workflows/orchestrator-attempt.yml", ".github/workflows/orchestrator-recovery.yml"}
 SCENARIOS = {"happy", "fix", "duplicate", "crash", "mutable", "hostile", "concurrent",
-             "access", "dispatch-loss"}
+             "access", "dispatch-loss", "sit-fail"}
 ISSUE_MARKER = "<!-- r2-control/v1 -->"
 PR_MARKER = "<!-- r2-implementation/v1 -->"
 VALUE_PATH = "synthetic_project/value.txt"
@@ -64,6 +65,7 @@ def output(name, value):
 
 
 def summary(value):
+    print("R2_EVIDENCE "+json.dumps(value, sort_keys=True))
     with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as stream:
         stream.write("R2 SYNTHETIC EVIDENCE\n\n" + json.dumps(value, sort_keys=True) + "\n")
 
@@ -256,6 +258,8 @@ def enter_attempt():
         previous = api.get("actions/runs/"+claimed)
         require(previous["status"] == "completed" and previous["conclusion"] in ("failure","cancelled","timed_out"),
                 "previous attempt still active")
+        require(pending.get("recovery_count",0) < 1, "automatic recovery limit reached")
+        pending["recovery_count"] = pending.get("recovery_count",0)+1
     pending["claimed_run"] = os.environ["GITHUB_RUN_ID"]
     doc = save_metadata(store,doc,"claim execution intent",eid+"-claim-"+os.environ["GITHUB_RUN_ID"])
     plan = {"issue":issue["number"],"identity":identity_from(doc,eid),"spec":doc["spec"],
@@ -274,6 +278,8 @@ def mock_execute():
     require(plan["control_plane_sha"] == os.environ["GITHUB_SHA"], "mock control source")
     ident = plan["identity"]
     value = b"1\n" if scenario(plan) in ("fix","duplicate","dispatch-loss") and ident["attempt"] == 0 else b"2\n"
+    if scenario(plan) == "sit-fail" and ident["attempt"] == 0:
+        value = b"not-an-integer\n"
     pub = Publisher(Path.cwd())
     wire = encode(ident,pub.tree(ident["base_sha"]),{VALUE_PATH:value},allowed_paths={VALUE_PATH})
     output("transport",wire.decode("ascii"))
@@ -328,20 +334,25 @@ def sit():
            and k not in ("PLAN","CANDIDATE_SHA","CANDIDATE_DIR","PYTHONPATH")}
     env.update({"GIT_TERMINAL_PROMPT":"0","GIT_CONFIG_GLOBAL":os.devnull,"GIT_CONFIG_NOSYSTEM":"1",
                 "SAFE_REPO":REPO,"SAFE_SHA":candidate,"SAFE_RUN":os.environ["GITHUB_RUN_ID"]})
-    test = subprocess.run(["python3","synthetic_project/test_value.py"],cwd=root,env=env,
-                          capture_output=True,text=True,timeout=30)
-    require(test.returncode == 0,"deterministic SIT failed")
+    try:
+        test = subprocess.run(["python3","synthetic_project/test_value.py"],cwd=root,env=env,
+                              capture_output=True,text=True,timeout=30)
+        sit_outcome = "PASS" if test.returncode == 0 else "FAIL"
+        exit_code = test.returncode
+    except subprocess.TimeoutExpired:
+        sit_outcome, exit_code = "BLOCKED", None
     hostile = None
     if scenario(plan) == "hostile":
         probe = subprocess.run(["python3","synthetic_project/hostile_probe.py"],cwd=root,env=env,
                                capture_output=True,text=True,timeout=90)
         require(probe.returncode == 0,"hostile capability probe failed")
         hostile = json.loads(probe.stdout)
-    report = {"candidate_sha":candidate,"spec_digest":plan["identity"]["spec_digest"],"outcome":"PASS",
-              "positive_control":True,"hostile":hostile}
+    report = {"candidate_sha":candidate,"spec_digest":plan["identity"]["spec_digest"],"outcome":sit_outcome,
+              "exit_code":exit_code,"positive_control":sit_outcome == "PASS","hostile":hostile}
     content = canonical(report).decode()
     artifact = {"path":"reports/result.json","content":content,"size":len(content),"digest":hash_bytes(content.encode())}
     output("report",artifact)
+    output("outcome",sit_outcome)
     summary(report)
 
 
@@ -371,12 +382,15 @@ def gate():
     plan = json.loads(os.environ["PLAN"])
     publication = json.loads(os.environ["PUBLICATION"])
     report = verify_artifact(json.loads(os.environ["SIT_REPORT"]))
-    review = json.loads(os.environ["REVIEW"])
+    review = json.loads(os.environ["REVIEW"]) if os.environ.get("REVIEW") else None
     ident = plan["identity"]
     candidate = publication["candidate_sha"]
-    require(cp == plan["control_plane_sha"] and candidate == report["candidate_sha"] == review["candidate_sha"],
+    require(cp == plan["control_plane_sha"] and candidate == report["candidate_sha"],
             "job candidate binding")
-    require(report["spec_digest"] == review["spec_digest"] == ident["spec_digest"], "job spec binding")
+    require(report["spec_digest"] == ident["spec_digest"], "job spec binding")
+    if report["outcome"] == "PASS":
+        require(review and review["candidate_sha"] == candidate and review["spec_digest"] == ident["spec_digest"],
+                "review missing or mismatched")
     require(api.get("git/ref/heads/"+ident["expected_branch"])["object"]["sha"] == candidate, "remote candidate changed")
     issue = api.get(f"issues/{plan['issue']}")
     store = store_for(api,plan["issue"],cp)
@@ -389,12 +403,15 @@ def gate():
     payloads = [
         (EventKind.DELIVERY,Delivery(ident["run_id"],ident["round_id"],ident["attempt"],ident["base_sha"],
             ident["input_sha"],candidate,ident["spec_digest"],"mock-executor-job",run_url())),
-        (EventKind.SIT,BoundResult(candidate,ident["spec_digest"],Outcome.PASS,run_url())),
+        (EventKind.SIT,BoundResult(candidate,ident["spec_digest"],Outcome(report["outcome"]),run_url())),
+    ]
+    if report["outcome"] == "PASS":
+        payloads += [
         (EventKind.ACCESS,ReviewAccess(candidate,ident["spec_digest"],Outcome(review["access"]),run_url(),"mock-reviewer-job")),
         (EventKind.REVIEW,ReviewResult(candidate,ident["spec_digest"],
             Outcome.BLOCKED if review["access"] != "PASS" else Outcome(review["outcome"]),
             run_url(),"mock-reviewer-job",True,0,int(review["p1"]),0,(finding,) if review["p1"] else ())),
-    ]
+        ]
     for kind,payload in payloads:
         current = RunState.from_dict(doc["run"])
         if current.state is State.HUMAN_DECISION_REQUIRED:
@@ -441,6 +458,11 @@ def dispatcher(recovery=False):
     cp = context(api)
     if recovery:
         failed = api.get("actions/runs/"+os.environ["FAILED_RUN_ID"])
+        for _ in range(15):
+            if failed["status"] == "completed":
+                break
+            time.sleep(1)
+            failed = api.get("actions/runs/"+os.environ["FAILED_RUN_ID"])
         require(failed["head_sha"] == cp and failed["path"] == ".github/workflows/orchestrator-attempt.yml"
                 and failed["conclusion"] in ("failure","cancelled","timed_out")
                 and failed["actor"]["login"] in (OWNER,BOT), "untrusted recovery signal")
@@ -476,13 +498,22 @@ def dispatcher(recovery=False):
     summary({"recovery":recovery,"dispatches":sent,"round_id":round_id})
 
 
+def request_recovery():
+    api=api_client()
+    context(api)
+    api.request("POST","actions/workflows/orchestrator-recovery.yml/dispatches",
+                {"ref":"main","inputs":{"failed_run_id":os.environ["GITHUB_RUN_ID"]}})
+    summary({"explicit_recovery_dispatch":os.environ["GITHUB_RUN_ID"]})
+
+
 if __name__ == "__main__":
     parser=argparse.ArgumentParser()
-    parser.add_argument("phase",choices=("intake","enter","mock","publish","sit","review","gate","dispatch","recover"))
+    parser.add_argument("phase",choices=("intake","enter","mock","publish","sit","review","gate","dispatch","recover","request-recovery"))
     phase=parser.parse_args().phase
     try:
         {"intake":intake,"enter":enter_attempt,"mock":mock_execute,"publish":publish,"sit":sit,
-         "review":mock_review,"gate":gate,"dispatch":dispatcher,"recover":lambda:dispatcher(True)}[phase]()
+         "review":mock_review,"gate":gate,"dispatch":dispatcher,"recover":lambda:dispatcher(True),
+         "request-recovery":request_recovery}[phase]()
     except (StateBlocked,PublicationBlocked,GitHubError,ValueError,KeyError,RuntimeError) as exc:
         print("R2 phase blocked/failed: "+str(exc))
         raise SystemExit(1)

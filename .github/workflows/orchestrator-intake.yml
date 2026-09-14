@@ -9,7 +9,7 @@ on:
       scenario:
         required: true
         type: choice
-        options: [happy, fix, duplicate, crash, mutable, hostile, concurrent, access, dispatch-loss]
+        options: [happy, fix, duplicate, crash, mutable, hostile, concurrent, access, dispatch-loss, sit-fail]
       dry_run:
         type: boolean
         default: false
