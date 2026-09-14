@@ -101,7 +101,7 @@ jobs:
     needs: [controller, publisher, sit, reviewer]
     if: always() && needs.controller.outputs.work == 'true' && needs.publisher.result == 'success' && needs.sit.result == 'success'
     runs-on: ubuntu-24.04
-    permissions: {contents: read, issues: write, actions: read}
+    permissions: {contents: read, issues: write, actions: read, pull-requests: read}
     outputs:
       continue: ${{ steps.gate.outputs.continue }}
       round_id: ${{ steps.gate.outputs.round_id }}

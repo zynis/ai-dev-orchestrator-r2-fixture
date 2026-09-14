@@ -273,6 +273,23 @@ def scenario(plan):
     return plan["spec"]["goal"].split("scenario=")[1]
 
 
+def implementation_prs(prs, branch):
+    return [p for p in prs if p.get("head",{}).get("ref") == branch
+            and p.get("head",{}).get("repo",{}).get("full_name") == REPO]
+
+
+def validate_pr(pr, branch, body, candidate_sha=None):
+    require(pr.get("user",{}).get("login") == BOT and pr.get("state") == "open"
+            and pr.get("draft") is True and not pr.get("merged_at")
+            and pr.get("body") == body
+            and pr.get("head",{}).get("repo",{}).get("full_name") == REPO
+            and pr.get("head",{}).get("ref") == branch
+            and pr.get("base",{}).get("repo",{}).get("full_name") == REPO
+            and pr.get("base",{}).get("ref") == "main", "untrusted implementation PR association")
+    if candidate_sha is not None:
+        require(pr["head"]["sha"] == candidate_sha, "PR candidate SHA mismatch")
+
+
 def mock_execute():
     plan = json.loads(os.environ["PLAN"])
     require(plan["control_plane_sha"] == os.environ["GITHUB_SHA"], "mock control source")
@@ -297,13 +314,12 @@ def publish():
     association = {"control_issue":plan["issue"],"run_id":ident["run_id"],"round_id":ident["round_id"],"spec_digest":ident["spec_digest"]}
     body = PR_MARKER+"\n"+canonical(association).decode()
     def existing():
-        return [p for p in api.pages("pulls?state=all&per_page=100")
-                if p["head"]["ref"] == ident["expected_branch"]]
+        return implementation_prs(api.pages("pulls?state=all&per_page=100"), ident["expected_branch"])
     found = existing()
     require(len(found) <= 1, "duplicate PR")
     if found:
         pr = found[0]
-        require(pr["body"] == body and pr["draft"] and pr["base"]["ref"] == "main", "unexpected existing PR")
+        validate_pr(pr, ident["expected_branch"], body)
     else:
         pr = api.mutate_once("POST","pulls",{"title":"R2 SYNTHETIC "+ident["round_id"],
             "head":ident["expected_branch"],"base":"main","body":body,"draft":True},
@@ -392,6 +408,10 @@ def gate():
         require(review and review["candidate_sha"] == candidate and review["spec_digest"] == ident["spec_digest"],
                 "review missing or mismatched")
     require(api.get("git/ref/heads/"+ident["expected_branch"])["object"]["sha"] == candidate, "remote candidate changed")
+    pr = api.get("pulls/"+str(publication["pr_number"]))
+    association = {"control_issue":plan["issue"],"run_id":ident["run_id"],"round_id":ident["round_id"],
+                   "spec_digest":ident["spec_digest"]}
+    validate_pr(pr, ident["expected_branch"], PR_MARKER+"\n"+canonical(association).decode(), candidate)
     issue = api.get(f"issues/{plan['issue']}")
     store = store_for(api,plan["issue"],cp)
     doc = store.repair()
