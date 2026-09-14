@@ -1,0 +1,127 @@
+name: R2 Attempt
+run-name: R2 attempt ${{ inputs.round_id }} ${{ inputs.event_id }}
+on:
+  workflow_dispatch:
+    inputs:
+      run_id: {required: true, type: string}
+      round_id: {required: true, type: string}
+      event_id: {required: true, type: string}
+      expected_revision: {required: true, type: string}
+      expected_sha: {required: true, type: string}
+permissions: {}
+concurrency:
+  group: r2-${{ inputs.round_id }}
+  queue: max
+jobs:
+  controller:
+    if: (github.actor == 'zynis' || github.actor == 'github-actions[bot]') && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions: {contents: read, issues: write, actions: read}
+    outputs:
+      work: ${{ steps.enter.outputs.work }}
+      plan: ${{ steps.enter.outputs.plan }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {ref: '${{ github.sha }}', fetch-depth: 0, persist-credentials: false}
+      - id: enter
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUEST: ${{ toJSON(inputs) }}
+        run: python3 -m ai_dev_orchestrator.live_r2 enter
+  executor:
+    needs: controller
+    if: needs.controller.outputs.work == 'true'
+    runs-on: ubuntu-24.04
+    permissions: {contents: read}
+    outputs:
+      transport: ${{ steps.mock.outputs.transport }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {ref: '${{ github.sha }}', fetch-depth: 0, persist-credentials: false}
+      - id: mock
+        env:
+          PLAN: ${{ needs.controller.outputs.plan }}
+        run: python3 -m ai_dev_orchestrator.live_r2 mock
+  publisher:
+    needs: [controller, executor]
+    runs-on: ubuntu-24.04
+    permissions: {contents: write, pull-requests: write}
+    outputs:
+      publication: ${{ steps.publish.outputs.publication }}
+      candidate_sha: ${{ steps.publish.outputs.candidate_sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {ref: '${{ github.sha }}', fetch-depth: 0, persist-credentials: false}
+      - id: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLAN: ${{ needs.controller.outputs.plan }}
+          TRANSPORT: ${{ needs.executor.outputs.transport }}
+        run: python3 -m ai_dev_orchestrator.live_r2 publish
+  sit:
+    needs: [controller, publisher]
+    runs-on: ubuntu-24.04
+    permissions: {contents: read}
+    outputs:
+      report: ${{ steps.sit.outputs.report }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {ref: '${{ github.sha }}', path: control, persist-credentials: false}
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {ref: '${{ needs.publisher.outputs.candidate_sha }}', path: candidate, persist-credentials: false}
+      - id: sit
+        env:
+          PYTHONPATH: control
+          PLAN: ${{ needs.controller.outputs.plan }}
+          CANDIDATE_SHA: ${{ needs.publisher.outputs.candidate_sha }}
+          CANDIDATE_DIR: candidate
+        run: python3 -m ai_dev_orchestrator.live_r2 sit
+  reviewer:
+    needs: [controller, publisher, sit]
+    runs-on: ubuntu-24.04
+    permissions: {contents: read}
+    outputs:
+      review: ${{ steps.review.outputs.review }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {ref: '${{ github.sha }}', path: control, persist-credentials: false}
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {ref: '${{ needs.publisher.outputs.candidate_sha }}', path: candidate, persist-credentials: false}
+      - id: review
+        env:
+          PYTHONPATH: control
+          PLAN: ${{ needs.controller.outputs.plan }}
+          CANDIDATE_SHA: ${{ needs.publisher.outputs.candidate_sha }}
+          CANDIDATE_DIR: candidate
+          SIT_REPORT: ${{ needs.sit.outputs.report }}
+        run: python3 -m ai_dev_orchestrator.live_r2 review
+  gate:
+    needs: [controller, publisher, sit, reviewer]
+    runs-on: ubuntu-24.04
+    permissions: {contents: read, issues: write, actions: read}
+    outputs:
+      continue: ${{ steps.gate.outputs.continue }}
+      round_id: ${{ steps.gate.outputs.round_id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {ref: '${{ github.sha }}', persist-credentials: false}
+      - id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLAN: ${{ needs.controller.outputs.plan }}
+          PUBLICATION: ${{ needs.publisher.outputs.publication }}
+          SIT_REPORT: ${{ needs.sit.outputs.report }}
+          REVIEW: ${{ needs.reviewer.outputs.review }}
+        run: python3 -m ai_dev_orchestrator.live_r2 gate
+  dispatch:
+    needs: gate
+    if: needs.gate.outputs.continue == 'true'
+    runs-on: ubuntu-24.04
+    permissions: {contents: read, issues: read, actions: write}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {ref: '${{ github.sha }}', persist-credentials: false}
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          ROUND_ID: ${{ needs.gate.outputs.round_id }}
+        run: python3 -m ai_dev_orchestrator.live_r2 dispatch

@@ -1,0 +1,58 @@
+name: R2 Intake
+run-name: R2 intake ${{ inputs.submission_id }}
+on:
+  workflow_dispatch:
+    inputs:
+      submission_id:
+        required: true
+        type: string
+      scenario:
+        required: true
+        type: choice
+        options: [happy, fix, duplicate, crash, mutable, hostile, concurrent, access, dispatch-loss]
+      dry_run:
+        type: boolean
+        default: false
+permissions: {}
+concurrency:
+  group: r2-${{ inputs.submission_id }}
+  queue: max
+jobs:
+  intake:
+    if: github.actor == 'zynis' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+    outputs:
+      work: ${{ steps.intake.outputs.work }}
+      round_id: ${{ steps.intake.outputs.round_id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - id: intake
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SUBMISSION: ${{ toJSON(inputs) }}
+        run: python3 -m ai_dev_orchestrator.live_r2 intake
+  dispatch:
+    needs: intake
+    if: needs.intake.outputs.work == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      issues: read
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          ROUND_ID: ${{ needs.intake.outputs.round_id }}
+        run: python3 -m ai_dev_orchestrator.live_r2 dispatch
