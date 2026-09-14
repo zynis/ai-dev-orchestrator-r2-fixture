@@ -44,7 +44,9 @@ def context(api):
     require(os.environ.get("GITHUB_REF") == "refs/heads/main", "untrusted workflow ref")
     cp = os.environ["GITHUB_SHA"]
     require(api.get("git/ref/heads/main")["object"]["sha"] == cp, "control plane drift")
-    require(os.environ.get("GITHUB_WORKFLOW_REF", "").split("@")[0].split(REPO + "/")[-1] in WORKFLOWS,
+    workflow_ref = os.environ.get("GITHUB_WORKFLOW_REF", "")
+    require(workflow_ref.startswith(REPO+"/") and workflow_ref.endswith("@refs/heads/main")
+            and workflow_ref.split("@")[0].split(REPO + "/")[-1] in WORKFLOWS,
             "untrusted workflow")
     return cp
 
@@ -105,7 +107,8 @@ def issue_body(spec):
 def find_issue(api, round_id):
     found = []
     for item in api.pages("issues?state=all&per_page=100"):
-        if "pull_request" in item or not item.get("body", "").startswith(ISSUE_MARKER + "\n"):
+        if ("pull_request" in item or item.get("user",{}).get("login") != BOT
+                or not item.get("body", "").startswith(ISSUE_MARKER + "\n")):
             continue
         try:
             spec = json.loads(item["body"][len(ISSUE_MARKER)+1:].split("\n")[0])
