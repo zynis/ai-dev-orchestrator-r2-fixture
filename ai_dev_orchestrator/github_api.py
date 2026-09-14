@@ -43,7 +43,7 @@ class GitHubAPI:
         return f"GitHubAPI(repository={self.repository!r}, dry_run={self.dry_run!r})"
 
     def _url(self, route):
-        url = urljoin(self.base, route)
+        url = urljoin(self.base, route) if route else self.base.rstrip('/')
         parts = urlparse(url)
         prefix = urlparse(self.base).path
         if (parts.scheme != "https" or parts.netloc != "api.github.com"
