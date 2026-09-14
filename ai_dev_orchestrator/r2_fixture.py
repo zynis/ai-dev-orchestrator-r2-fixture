@@ -181,4 +181,3 @@ class FixtureAdapter:
                   "artifact_negative_tests":rejected}
         output("review",result)
         summary(result)
-
